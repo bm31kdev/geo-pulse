@@ -5,6 +5,7 @@ les évolutions de cette bibliothèque sans copier ses API internes asynchrones.
 """
 from __future__ import annotations
 import asyncio
+import json
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,12 @@ class ErreurIPhone(RuntimeError):
 class EtatIPhone:
     connecte: bool
     message: str
+    nom: str = "—"
+    modele: str = "—"
+    ios: str = "—"
+    udid: str = "—"
+    numero: str = "—"
+    mode_developpeur: bool = False
 
 
 class MoteurIPhone:
@@ -48,7 +55,24 @@ class MoteurIPhone:
             appairage = self._lancer(["lockdown", "info"], timeout=15)
             detail = (appairage.stdout + "\n" + appairage.stderr).strip()
             if appairage.returncode == 0:
-                return EtatIPhone(True, "iPhone USB détecté et appairage vérifié.")
+                try:
+                    infos = json.loads(appairage.stdout)
+                    version = str(infos.get("ProductVersion", "inconnue"))
+                    etat = EtatIPhone(
+                        True, "iPhone USB détecté et appairage vérifié.",
+                        str(infos.get("DeviceName", "iPhone")), str(infos.get("ProductType", "iPhone")), version,
+                        str(infos.get("UniqueDeviceID", "—")), str(infos.get("PhoneNumber", "—")),
+                    )
+                    majeur = int(version.split(".")[0])
+                    if majeur < 17:
+                        return EtatIPhone(False, f"iOS {version} est trop ancien : iOS 17 ou supérieur est requis.", nom=etat.nom, modele=etat.modele, ios=etat.ios, udid=etat.udid, numero=etat.numero)
+                    mode = self._lancer(["amfi", "developer-mode-status"], timeout=12)
+                    actif = mode.returncode == 0 and "true" in mode.stdout.lower()
+                    if not actif:
+                        return EtatIPhone(False, "Mode développeur désactivé : activez-le dans Réglages > Confidentialité et sécurité.", nom=etat.nom, modele=etat.modele, ios=etat.ios, udid=etat.udid, numero=etat.numero)
+                    return EtatIPhone(**etat.__dict__ | {"mode_developpeur": True})
+                except (ValueError, json.JSONDecodeError):
+                    return EtatIPhone(True, "iPhone USB détecté et appairage vérifié.")
             if "183" in detail:
                 return EtatIPhone(False, "Erreur usbmuxd 183 : fermez iTunes/Apple Devices, débranchez/rebranchez l'iPhone, puis réessayez.")
             return EtatIPhone(False, "iPhone détecté, mais appairage/verrouillage refusé : " + (detail or "détail indisponible"))

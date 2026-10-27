@@ -1,6 +1,6 @@
 # GeoPulse
 
-**GeoPulse** est un studio Windows de simulation de trajet GPS pour iPhone, entièrement en français. Il associe une carte OpenStreetMap interactive, des itinéraires routiers OSRM et le service de développement DVT d’Apple via `pymobiledevice3`.
+**GeoPulse 1.1** est un studio Windows de simulation de trajet GPS pour iPhone, entièrement en français. Il associe une carte OpenStreetMap interactive, des itinéraires routiers OSRM et le service de développement DVT d’Apple via `pymobiledevice3`.
 
 > Conçu pour les tests de développement et de géolocalisation sur un appareil que vous contrôlez.
 

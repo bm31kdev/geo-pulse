@@ -8,7 +8,7 @@ import sys
 from threading import Thread
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot, QUrl, Qt
-from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QRadioButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QFrame, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QRadioButton, QSlider, QVBoxLayout, QWidget
 from geo_pulse.iphone_engine import MoteurIPhone, ErreurIPhone
 from geo_pulse.route import calculer_itineraire, points_equidistants, ErreurItineraire
 from geo_pulse.simulator import SimulateurTrajet
@@ -19,15 +19,20 @@ class Fenetre(QMainWindow):
     preparation_finie = Signal(object)
     def __init__(self):
         super().__init__(); self.setWindowTitle('GeoPulse'); self.resize(1380, 850)
-        self.depart=None; self.destination=None; self.itineraire=None; self.iphone=MoteurIPhone(); self.simulation_iphone=False; self.iphone_pret=False; self.iphone_connecte=False
+        self.depart=None; self.destination=None; self.itineraire=None; self.iphone=MoteurIPhone(); self.iphone_pret=False; self.iphone_connecte=False
+        menu=self.menuBar(); actions=menu.addMenu('Actions'); actions.addAction('Connecter mon iPhone', self.connecter_iphone); actions.addAction('Arrêter et restaurer le GPS', self.arreter)
+        aide=menu.addMenu('Aide'); aide.addAction('À propos de GeoPulse 1.1', lambda: QMessageBox.information(self, 'GeoPulse 1.1', 'GeoPulse 1.1\nSimulation GPS de développement pour iPhone.'))
         root=QWidget(); self.setCentralWidget(root); layout=QHBoxLayout(root); layout.setContentsMargins(0,0,0,0); layout.setSpacing(0)
         panneau=QFrame(); panneau.setObjectName('panneau'); panneau.setFixedWidth(360); col=QVBoxLayout(panneau); col.setContentsMargins(24,26,24,24); col.setSpacing(12); layout.addWidget(panneau)
         titre=QLabel('Geo<span style="color:#38bdf8">Pulse</span>'); titre.setObjectName('titre'); col.addWidget(titre)
-        sous=QLabel('Simulation GPS de développement'); sous.setObjectName('sous'); col.addWidget(sous)
-        self.etat=QLabel('● Mode simulation locale'); self.etat.setObjectName('etat'); self.etat.setWordWrap(True); col.addWidget(self.etat)
+        sous=QLabel('Version 1.1  ·  Studio GPS pour iPhone'); sous.setObjectName('sous'); col.addWidget(sous)
+        self.etat=QLabel('● En attente de connexion USB'); self.etat.setObjectName('etat'); self.etat.setWordWrap(True); col.addWidget(self.etat)
         self.connecter=QPushButton('Connecter mon iPhone'); self.connecter.clicked.connect(self.connecter_iphone); col.addWidget(self.connecter)
         self.preparer=QPushButton('Préparer le GPS de l’iPhone'); self.preparer.clicked.connect(self.preparer_iphone); self.preparer.setEnabled(False); col.addWidget(self.preparer)
-        self.local=QCheckBox('Mode simulation locale (sans iPhone)'); self.local.setChecked(True); self.local.toggled.connect(self.change_mode); col.addWidget(self.local)
+        self.fiche=QFrame(); self.fiche.setObjectName('fiche'); fiche_form=QFormLayout(self.fiche); fiche_form.setContentsMargins(12,10,12,10)
+        self.info_nom=QLabel('—'); self.info_modele=QLabel('—'); self.info_ios=QLabel('—'); self.info_udid=QLabel('—'); self.info_numero=QLabel('—')
+        for titre, valeur in [('APPAREIL',self.info_nom), ('MODÈLE',self.info_modele), ('IOS',self.info_ios), ('UDID',self.info_udid), ('NUMÉRO',self.info_numero)]: fiche_form.addRow(titre, valeur)
+        col.addWidget(self.fiche)
         col.addWidget(QLabel('POINT DE DÉPART')); self.champ_depart=QLineEdit(); self.champ_depart.setPlaceholderText('Cliquez sur la carte ou saisissez : 48.8566, 2.3522'); self.champ_depart.editingFinished.connect(self.lire_champs); col.addWidget(self.champ_depart)
         col.addWidget(QLabel('DESTINATION')); self.champ_dest=QLineEdit(); self.champ_dest.setPlaceholderText('Cliquez sur la carte ou saisissez : 48.8584, 2.2945'); self.champ_dest.editingFinished.connect(self.lire_champs); col.addWidget(self.champ_dest)
         self.calculer=QPushButton('Calculer l’itinéraire'); self.calculer.clicked.connect(self.calculer_route); col.addWidget(self.calculer)
@@ -46,7 +51,7 @@ class Fenetre(QMainWindow):
         self.carte=CarteOSM(); layout.addWidget(self.carte,1); self.carte.clique.connect(self.point_carte)
         self.simulateur=SimulateurTrajet(); self.simulateur.position.connect(self.position); self.simulateur.erreur.connect(self.erreur); self.simulateur.termine.connect(lambda:self.message('Trajet terminé.'))
         self.preparation_finie.connect(self.preparation_terminee)
-        self.setStyleSheet("""QMainWindow{background:#0f172a;color:#e2e8f0}#panneau{background:#111827}#titre{font-size:27px;font-weight:700}#sous{color:#94a3b8;margin-bottom:12px}QLabel{font-size:12px;color:#cbd5e1}#etat{background:#172554;color:#93c5fd;border-radius:7px;padding:10px}QLineEdit{background:#1f2937;border:1px solid #334155;border-radius:7px;padding:10px;color:#f8fafc}QPushButton{background:#0284c7;color:white;border:0;border-radius:7px;padding:10px;font-weight:600}QPushButton:hover{background:#0ea5e9}QRadioButton,QCheckBox{color:#e2e8f0}#infos{background:#1f2937;border-radius:7px;padding:4px}""")
+        self.setStyleSheet("""QMainWindow{background:#0f172a;color:#e2e8f0}QMenuBar{background:#0b1220;color:#cbd5e1;padding:5px}QMenuBar::item:selected,QMenu::item:selected{background:#0284c7}QMenu{background:#111827;color:#e2e8f0}#panneau{background:#111827}#titre{font-size:30px;font-weight:800}#sous{color:#7dd3fc;margin-bottom:8px}QLabel{font-size:12px;color:#cbd5e1}#etat{background:#172554;color:#bfdbfe;border:1px solid #1d4ed8;border-radius:9px;padding:11px}#fiche,#infos{background:#182235;border:1px solid #26364e;border-radius:9px;padding:4px}QLineEdit{background:#1f2937;border:1px solid #334155;border-radius:8px;padding:10px;color:#f8fafc}QPushButton{background:#0284c7;color:white;border:0;border-radius:8px;padding:11px;font-weight:700}QPushButton:hover{background:#0ea5e9}QPushButton:disabled{background:#334155;color:#94a3b8}QRadioButton,QCheckBox{color:#e2e8f0}""")
 
     def point_carte(self, lat, lon):
         if self.depart is None or self.destination is not None:
@@ -68,10 +73,9 @@ class Fenetre(QMainWindow):
         except (ValueError, TypeError):
             self.erreur('Coordonnées invalides. Utilisez le format : latitude, longitude.')
     def connecter_iphone(self):
-        e=self.iphone.verifier(); self.iphone_connecte=e.connecte; self.etat.setText(('● ' if e.connecte else '⚠ ') + e.message); self.preparer.setEnabled(e.connecte and not self.local.isChecked()); self.iphone_pret=False
-        self.simulation_iphone=False
+        e=self.iphone.verifier(); self.iphone_connecte=e.connecte; self.etat.setText(('● ' if e.connecte else '⚠ ') + e.message); self.preparer.setEnabled(e.connecte); self.iphone_pret=False
+        self.info_nom.setText(e.nom); self.info_modele.setText(e.modele); self.info_ios.setText(e.ios); self.info_udid.setText(e.udid); self.info_numero.setText(e.numero)
     def preparer_iphone(self):
-        if self.local.isChecked(): return self.erreur('Décochez le mode local avant de préparer l’iPhone.')
         self.preparer.setEnabled(False); self.etat.setText('● Préparation du tunnel et de l’image de développement iPhone en cours…')
         Thread(target=self._preparer_iphone_worker, daemon=True).start()
     def _preparer_iphone_worker(self):
@@ -79,12 +83,8 @@ class Fenetre(QMainWindow):
         except Exception as exc: resultat=type('Etat', (), {'connecte':False, 'message':str(exc)})()
         self.preparation_finie.emit(resultat)
     def preparation_terminee(self, resultat):
-        self.iphone_pret=resultat.connecte; self.simulation_iphone=resultat.connecte and not self.local.isChecked()
+        self.iphone_pret=resultat.connecte
         self.etat.setText(('● ' if resultat.connecte else '⚠ ') + resultat.message); self.preparer.setEnabled(not resultat.connecte)
-    def change_mode(self, local):
-        self.simulation_iphone=not local and self.iphone_pret
-        self.preparer.setEnabled(not local and self.iphone_connecte and not self.iphone_pret)
-        self.etat.setText('● Mode simulation locale — aucun iPhone n’est modifié.' if local else '⚠ Mode iPhone : cliquez sur « Connecter mon iPhone » pour vérifier l’appairage.')
     def calculer_route(self):
         if not self.depart or not self.destination: return self.erreur('Choisissez un départ puis une destination sur la carte.')
         try:
@@ -95,10 +95,9 @@ class Fenetre(QMainWindow):
             self.message('Itinéraire calculé avec OSRM.')
         except ErreurItineraire as exc: self.erreur(str(exc))
     def demarrer(self):
-        if not self.local.isChecked() and not self.iphone_pret:
+        if not self.iphone_pret:
             return self.erreur('iPhone non préparé : cliquez sur « Connecter mon iPhone », puis « Préparer le GPS de l’iPhone ».')
-        if self.simulation_iphone: self.simulateur._emettre=self.iphone.envoyer
-        else: self.simulateur._emettre=None
+        self.simulateur._emettre=self.iphone.envoyer
         self.simulateur.charger(points_equidistants(self.itineraire.points) if self.itineraire else [],self.vitesse.value(),self.boucle.isChecked()); self.simulateur.demarrer()
     def pause(self): self.simulateur.pause(); self.message('Simulation en pause.')
     def reprendre(self): self.simulateur.reprendre(); self.message('Simulation reprise.')
