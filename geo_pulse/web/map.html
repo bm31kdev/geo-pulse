@@ -1,0 +1,10 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="vendor/leaflet.css"><script src="qrc:///qtwebchannel/qwebchannel.js"></script><script src="vendor/leaflet.js"></script><style>html,body,#map{height:100%;margin:0;background:#111827}.leaflet-control-attribution{background:#111827cc!important;color:#cbd5e1!important}.leaflet-control-attribution a{color:#60a5fa}</style></head><body><div id="map"></div><script>
+const map=L.map('map',{zoomControl:false}).setView([48.8566,2.3522],12); L.control.zoom({position:'topright'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+let start=null,end=null,line=null,marker=null,bridge=null;
+new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge; map.on('click',e=>bridge.carteCliquee(e.latlng.lat,e.latlng.lng));});
+function setPoints(a,b){start=L.circleMarker(a,{radius:10,color:'#fff',weight:2,fillColor:'#22c55e',fillOpacity:1}).addTo(map).bindPopup('Départ');end=L.circleMarker(b,{radius:10,color:'#fff',weight:2,fillColor:'#f97316',fillOpacity:1}).addTo(map).bindPopup('Destination');map.fitBounds(L.latLngBounds([a,b]),{padding:[35,35]});}
+function dessiner(points){if(line)map.removeLayer(line);line=L.polyline(points,{color:'#38bdf8',weight:6,opacity:.9}).addTo(map);map.fitBounds(line.getBounds(),{padding:[30,30]});}
+function afficherPosition(lat,lon){const p=[lat,lon];if(!marker)marker=L.circleMarker(p,{radius:9,color:'#fff',weight:2,fillColor:'#22c55e',fillOpacity:1}).addTo(map);else marker.setLatLng(p);map.panTo(p,{animate:true});}
+function effacer(){[start,end,line,marker].forEach(x=>x&&map.removeLayer(x));start=end=line=marker=null;}
+</script></body></html>
