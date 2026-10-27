@@ -9,6 +9,9 @@ import json
 import shutil
 import subprocess
 import sys
+import time
+from pathlib import Path
+from queue import Queue, Empty
 from threading import Thread
 from dataclasses import dataclass
 
@@ -40,6 +43,12 @@ class MoteurIPhone:
         self._boucle: asyncio.AbstractEventLoop | None = None
         self._fil_boucle: Thread | None = None
         self._tunnel = self._dvt = self._localisation = None
+        self._worker_dvt: subprocess.Popen[str] | None = None
+
+    @property
+    def _est_compile(self) -> bool:
+        """Nuitka définit __compiled__, PyInstaller utilise sys.frozen."""
+        return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
 
     def _lancer(self, arguments: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
         try:
@@ -81,6 +90,21 @@ class MoteurIPhone:
         return EtatIPhone(False, f"Aucun iPhone utilisable ou appairage refusé. Détail : {texte or 'aucun périphérique détecté'}")
 
     def envoyer(self, latitude: float, longitude: float) -> None:
+        if self._est_compile:
+            if not self._worker_dvt:
+                raise ErreurIPhone("Service GPS iPhone non préparé. Cliquez sur « Préparer le GPS de l’iPhone ».")
+            commande = {"action": "set", "latitude": latitude, "longitude": longitude}
+            try:
+                self._commande_worker(commande)
+            except ErreurIPhone:
+                # Le tunnel iOS peut expirer après une veille ou un bref
+                # débranchement USB. Recréez-le une fois avant d'abandonner.
+                self._worker_dvt.terminate()
+                self._worker_dvt = None
+                self._ouvrir_worker_dvt()
+                self._commande_worker(commande)
+            self.actif = True
+            return
         if not self._localisation:
             raise ErreurIPhone("Service GPS iPhone non préparé. Cliquez sur « Préparer le GPS de l’iPhone ».")
         # Le service DVT reste ouvert pendant tout le trajet. L'ancien appel CLI
@@ -89,6 +113,17 @@ class MoteurIPhone:
         self.actif = True
 
     def restaurer(self) -> None:
+        if self._est_compile and self._worker_dvt:
+            try:
+                self._commande_worker({"action": "clear"})
+                self._commande_worker({"action": "quitter"}, timeout=5)
+            except Exception as exc:
+                raise ErreurIPhone(f"Impossible de restaurer la localisation réelle : {exc}") from exc
+            finally:
+                self._worker_dvt.terminate()
+                self._worker_dvt = None
+            self.actif = False
+            return
         if self._localisation:
             try:
                 self._appeler(self._effacer_position(), timeout=15)
@@ -96,33 +131,94 @@ class MoteurIPhone:
                 raise ErreurIPhone(f"Impossible de restaurer la localisation réelle : {exc}") from exc
         self.actif = False
 
-    def preparer_simulation(self) -> EtatIPhone:
+    def preparer_simulation(self, etat: EtatIPhone | None = None) -> EtatIPhone:
         """Monte l'image de développement adaptée sans toucher aux données iOS.
 
         pymobiledevice3 choisit l'image adéquate (cryptex pour les versions
         iOS récentes). Le tunnel userspace ne demande pas de privilège admin.
         """
-        etat = self.verifier()
+        etat = etat or self.verifier()
         if not etat.connecte:
             return etat
         resultat = self._lancer(["mounter", "auto-mount", "--userspace"], timeout=180)
         if resultat.returncode:
             detail = (resultat.stderr or resultat.stdout).strip()
-            return EtatIPhone(False, "Préparation DVT impossible : " + (detail or "erreur inconnue"))
+            return EtatIPhone(False, "Préparation DVT impossible : " + (detail or "erreur inconnue"),
+                              etat.nom, etat.modele, etat.ios, etat.udid, etat.numero, etat.mode_developpeur)
         try:
             self._ouvrir_service_dvt()
         except Exception as exc:
-            return EtatIPhone(False, f"Image de développement montée, mais service GPS DVT inaccessible : {exc}")
-        return EtatIPhone(True, "iPhone prêt pour la simulation GPS DVT. Tunnel et service de localisation ouverts.")
+            return EtatIPhone(False, f"Image de développement montée, mais service GPS DVT inaccessible : {exc}",
+                              etat.nom, etat.modele, etat.ios, etat.udid, etat.numero, etat.mode_developpeur)
+        return EtatIPhone(True, "iPhone prêt pour la simulation GPS DVT. Tunnel et service de localisation ouverts.",
+                          etat.nom, etat.modele, etat.ios, etat.udid, etat.numero, etat.mode_developpeur)
 
     def _ouvrir_service_dvt(self) -> None:
         if self._localisation:
+            return
+        if self._est_compile:
+            self._ouvrir_worker_dvt()
             return
         if not self._boucle:
             self._boucle = asyncio.new_event_loop()
             self._fil_boucle = Thread(target=self._executer_boucle, daemon=True, name="GeoPulse-DVT")
             self._fil_boucle.start()
         self._appeler(self._connexion_dvt(), timeout=45)
+
+    def _ouvrir_worker_dvt(self) -> None:
+        """DVT reste dans Python normal ; l'EXE Nuitka reste ainsi léger.
+
+        pymobiledevice3 est déjà installé avec GeoPulse sur ce PC. Ce processus
+        local ne fait qu'héberger la session DVT persistante, il n'envoie aucune
+        donnée hors de l'ordinateur.
+        """
+        if self._worker_dvt and self._worker_dvt.poll() is None:
+            return
+        if not self.commande:
+            raise ErreurIPhone("pymobiledevice3 est introuvable. Réinstallez les dépendances avec requirements.txt.")
+        python = Path(self.commande).parent.parent / "python.exe"
+        script = Path(sys.argv[0]).resolve().parent / "geo_pulse" / "dvt_worker.py"
+        if not python.exists() or not script.exists():
+            raise ErreurIPhone("Pont GPS DVT introuvable dans l’installation GeoPulse.")
+        derniere_erreur: Exception | None = None
+        # Un tunnel précédent peut rester bloqué après un débranchement USB.
+        # Une seconde session propre résout ce cas sans masquer l'erreur finale.
+        for tentative in range(2):
+            self._worker_dvt = subprocess.Popen(
+                [str(python), str(script)], text=True, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                self._commande_worker({"action": "ouvrir"}, timeout=25)
+                return
+            except ErreurIPhone as exc:
+                derniere_erreur = exc
+                self._worker_dvt.terminate()
+                self._worker_dvt = None
+                if tentative == 0:
+                    time.sleep(1)
+        raise ErreurIPhone(f"Service GPS DVT inaccessible après une nouvelle tentative : {derniere_erreur}")
+
+    @property
+    def service_actif(self) -> bool:
+        return bool(self._worker_dvt or self._localisation)
+
+    def _commande_worker(self, commande: dict[str, object], timeout: int = 15) -> dict[str, object]:
+        if not self._worker_dvt or not self._worker_dvt.stdin or not self._worker_dvt.stdout:
+            raise ErreurIPhone("Pont GPS DVT non démarré.")
+        self._worker_dvt.stdin.write(json.dumps(commande) + "\n")
+        self._worker_dvt.stdin.flush()
+        reponses: Queue[str] = Queue(maxsize=1)
+        Thread(target=lambda: reponses.put(self._worker_dvt.stdout.readline()), daemon=True).start()
+        try:
+            ligne = reponses.get(timeout=timeout)
+            resultat = json.loads(ligne)
+        except (Empty, json.JSONDecodeError) as exc:
+            raise ErreurIPhone("Le pont GPS DVT ne répond pas. Reconnectez l’iPhone puis réessayez.") from exc
+        if not resultat.get("ok"):
+            raise ErreurIPhone(str(resultat.get("erreur", "Erreur DVT inconnue.")))
+        return resultat
 
     def _executer_boucle(self) -> None:
         assert self._boucle is not None

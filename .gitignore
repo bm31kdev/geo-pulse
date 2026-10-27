@@ -3,5 +3,9 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+build_check*/
+*.build/
+*.dist/
+*.log
 *.spec
 .venv/

@@ -20,15 +20,14 @@ class Fenetre(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle('GeoPulse'); self.resize(1380, 850)
         self.depart=None; self.destination=None; self.itineraire=None; self.iphone=MoteurIPhone(); self.iphone_pret=False; self.iphone_connecte=False
-        menu=self.menuBar(); actions=menu.addMenu('Actions'); actions.addAction('Connecter mon iPhone', self.connecter_iphone); actions.addAction('Arrêter et restaurer le GPS', self.arreter)
-        aide=menu.addMenu('Aide'); aide.addAction('À propos de GeoPulse 1.1', lambda: QMessageBox.information(self, 'GeoPulse 1.1', 'GeoPulse 1.1\nSimulation GPS de développement pour iPhone.'))
+        menu=self.menuBar(); actions=menu.addMenu('Actions'); actions.addAction('Connecter et préparer l’iPhone', self.connecter_preparer_iphone); actions.addAction('Téléporter à la destination', self.teleporter); actions.addAction('Arrêter et restaurer le GPS', self.arreter)
+        aide=menu.addMenu('Aide'); aide.addAction('À propos de GeoPulse V1.1 DEBUG', lambda: QMessageBox.information(self, 'GeoPulse V1.1 DEBUG', 'GeoPulse V1.1 DEBUG\nSimulation GPS de développement pour iPhone.'))
         root=QWidget(); self.setCentralWidget(root); layout=QHBoxLayout(root); layout.setContentsMargins(0,0,0,0); layout.setSpacing(0)
         panneau=QFrame(); panneau.setObjectName('panneau'); panneau.setFixedWidth(360); col=QVBoxLayout(panneau); col.setContentsMargins(24,26,24,24); col.setSpacing(12); layout.addWidget(panneau)
         titre=QLabel('Geo<span style="color:#38bdf8">Pulse</span>'); titre.setObjectName('titre'); col.addWidget(titre)
-        sous=QLabel('Version 1.1  ·  Studio GPS pour iPhone'); sous.setObjectName('sous'); col.addWidget(sous)
+        sous=QLabel('V1.1 DEBUG  ·  Studio GPS pour iPhone'); sous.setObjectName('sous'); col.addWidget(sous)
         self.etat=QLabel('● En attente de connexion USB'); self.etat.setObjectName('etat'); self.etat.setWordWrap(True); col.addWidget(self.etat)
-        self.connecter=QPushButton('Connecter mon iPhone'); self.connecter.clicked.connect(self.connecter_iphone); col.addWidget(self.connecter)
-        self.preparer=QPushButton('Préparer le GPS de l’iPhone'); self.preparer.clicked.connect(self.preparer_iphone); self.preparer.setEnabled(False); col.addWidget(self.preparer)
+        self.connecter=QPushButton('Connecter et préparer l’iPhone'); self.connecter.clicked.connect(self.connecter_preparer_iphone); col.addWidget(self.connecter)
         self.fiche=QFrame(); self.fiche.setObjectName('fiche'); fiche_form=QFormLayout(self.fiche); fiche_form.setContentsMargins(12,10,12,10)
         self.info_nom=QLabel('—'); self.info_modele=QLabel('—'); self.info_ios=QLabel('—'); self.info_udid=QLabel('—'); self.info_numero=QLabel('—')
         for titre, valeur in [('APPAREIL',self.info_nom), ('MODÈLE',self.info_modele), ('IOS',self.info_ios), ('UDID',self.info_udid), ('NUMÉRO',self.info_numero)]: fiche_form.addRow(titre, valeur)
@@ -36,6 +35,7 @@ class Fenetre(QMainWindow):
         col.addWidget(QLabel('POINT DE DÉPART')); self.champ_depart=QLineEdit(); self.champ_depart.setPlaceholderText('Cliquez sur la carte ou saisissez : 48.8566, 2.3522'); self.champ_depart.editingFinished.connect(self.lire_champs); col.addWidget(self.champ_depart)
         col.addWidget(QLabel('DESTINATION')); self.champ_dest=QLineEdit(); self.champ_dest.setPlaceholderText('Cliquez sur la carte ou saisissez : 48.8584, 2.2945'); self.champ_dest.editingFinished.connect(self.lire_champs); col.addWidget(self.champ_dest)
         self.calculer=QPushButton('Calculer l’itinéraire'); self.calculer.clicked.connect(self.calculer_route); col.addWidget(self.calculer)
+        self.teleporter_bouton=QPushButton('Téléporter à la destination'); self.teleporter_bouton.clicked.connect(self.teleporter); col.addWidget(self.teleporter_bouton)
         col.addWidget(QLabel('MODE DE DÉPLACEMENT')); modes=QHBoxLayout(); self.groupe=QButtonGroup(self)
         for texte in ('Marche','Vélo','Voiture'):
             b=QRadioButton(texte); self.groupe.addButton(b); modes.addWidget(b)
@@ -72,19 +72,37 @@ class Fenetre(QMainWindow):
             if self.depart and self.destination: self.carte.set_points(self.depart, self.destination)
         except (ValueError, TypeError):
             self.erreur('Coordonnées invalides. Utilisez le format : latitude, longitude.')
-    def connecter_iphone(self):
-        e=self.iphone.verifier(); self.iphone_connecte=e.connecte; self.etat.setText(('● ' if e.connecte else '⚠ ') + e.message); self.preparer.setEnabled(e.connecte); self.iphone_pret=False
+    def _afficher_fiche(self, e):
         self.info_nom.setText(e.nom); self.info_modele.setText(e.modele); self.info_ios.setText(e.ios); self.info_udid.setText(e.udid); self.info_numero.setText(e.numero)
-    def preparer_iphone(self):
-        self.preparer.setEnabled(False); self.etat.setText('● Préparation du tunnel et de l’image de développement iPhone en cours…')
-        Thread(target=self._preparer_iphone_worker, daemon=True).start()
-    def _preparer_iphone_worker(self):
-        try: resultat=self.iphone.preparer_simulation()
-        except Exception as exc: resultat=type('Etat', (), {'connecte':False, 'message':str(exc)})()
-        self.preparation_finie.emit(resultat)
-    def preparation_terminee(self, resultat):
-        self.iphone_pret=resultat.connecte
-        self.etat.setText(('● ' if resultat.connecte else '⚠ ') + resultat.message); self.preparer.setEnabled(not resultat.connecte)
+
+    def connecter_preparer_iphone(self):
+        """Un seul parcours : USB, appairage, image de développement puis DVT."""
+        self.connecter.setEnabled(False)
+        self.iphone_pret=False
+        self.etat.setText('● Vérification USB et appairage de l’iPhone…')
+        Thread(target=self._connexion_preparation_worker, daemon=True).start()
+
+    def _connexion_preparation_worker(self):
+        try:
+            etat = self.iphone.verifier()
+            if not etat.connecte:
+                self.preparation_finie.emit((etat, None))
+                return
+            resultat = self.iphone.preparer_simulation(etat)
+            self.preparation_finie.emit((etat, resultat))
+        except Exception as exc:
+            erreur = type('Etat', (), {'connecte': False, 'message': str(exc), 'nom': '—', 'modele': '—', 'ios': '—', 'udid': '—', 'numero': '—'})()
+            self.preparation_finie.emit((erreur, None))
+
+    def preparation_terminee(self, charge):
+        etat, resultat = charge
+        final = resultat or etat
+        self._afficher_fiche(etat)
+        self.iphone_connecte = etat.connecte
+        self.iphone_pret = bool(resultat and resultat.connecte)
+        self.etat.setText(('● ' if self.iphone_pret else '⚠ ') + final.message)
+        self.connecter.setEnabled(True)
+        self.connecter.setText('iPhone prêt — reconnecter' if self.iphone_pret else 'Réessayer la connexion iPhone')
     def calculer_route(self):
         if not self.depart or not self.destination: return self.erreur('Choisissez un départ puis une destination sur la carte.')
         try:
@@ -96,16 +114,41 @@ class Fenetre(QMainWindow):
         except ErreurItineraire as exc: self.erreur(str(exc))
     def demarrer(self):
         if not self.iphone_pret:
-            return self.erreur('iPhone non préparé : cliquez sur « Connecter mon iPhone », puis « Préparer le GPS de l’iPhone ».')
+            return self.erreur('iPhone non préparé : cliquez sur « Connecter et préparer l’iPhone ».')
+        if not self.itineraire:
+            return self.erreur('Calculez un itinéraire avant de démarrer la simulation.')
         self.simulateur._emettre=self.iphone.envoyer
         self.simulateur.charger(points_equidistants(self.itineraire.points) if self.itineraire else [],self.vitesse.value(),self.boucle.isChecked()); self.simulateur.demarrer()
+    def teleporter(self):
+        """Envoie immédiatement la destination choisie au service GPS DVT."""
+        cible = self.destination or self.depart
+        if not cible:
+            return self.erreur('Choisissez une destination sur la carte avant de téléporter l’iPhone.')
+        if not self.iphone_pret:
+            return self.erreur('iPhone non préparé : cliquez sur « Connecter et préparer l’iPhone » avant toute téléportation.')
+        lat, lon = cible
+        reponse = QMessageBox.question(
+            self, 'Confirmer la téléportation',
+            f'Téléporter immédiatement l’iPhone vers :\n{lat:.6f}, {lon:.6f} ?\n\nLa localisation réelle sera restaurée avec « Arrêter ».',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reponse != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.iphone.envoyer(lat, lon)
+            self.carte.afficher_position(lat, lon)
+            self.etat.setText('● Téléportation GPS active. Cliquez sur « Arrêter » pour restaurer la localisation réelle.')
+            self.message(f'Téléportation effectuée vers {lat:.6f}, {lon:.6f}.')
+        except ErreurIPhone as exc:
+            self.erreur(str(exc))
     def pause(self): self.simulateur.pause(); self.message('Simulation en pause.')
     def reprendre(self): self.simulateur.reprendre(); self.message('Simulation reprise.')
     def arreter(self):
         self.simulateur.arreter()
         # La restauration dépend de l'état réel du moteur, même si l'utilisateur
         # a basculé ensuite vers le mode local.
-        if self.iphone.actif:
+        if self.iphone.actif or self.iphone.service_actif:
             try: self.iphone.restaurer()
             except ErreurIPhone as exc: return self.erreur(str(exc))
         self.message('Simulation arrêtée. Localisation réelle restaurée si un iPhone était actif.')
